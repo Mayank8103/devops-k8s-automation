@@ -5,47 +5,69 @@ on:
     branches:
       - main
 
+# 🔴 REQUIRED for Workload Identity Federation
 permissions:
   contents: read
-  id-token: write   # 🔴 REQUIRED FOR WORKLOAD IDENTITY
+  id-token: write
+
+env:
+  PROJECT_ID: devops-k8s-assignment-483517
+  REGION: us-central1
+  GAR_REPO: hello-repo
+  IMAGE_NAME: hello-app
+  CLUSTER_NAME: devops-gke
+  CLUSTER_LOCATION: us-central1
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ Authenticate to Google Cloud using Workload Identity Federation
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: "projects/708132204852/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
           service_account: "github-actions-sa@devops-k8s-assignment-483517.iam.gserviceaccount.com"
 
+      # 3️⃣ Install and configure gcloud
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: devops-k8s-assignment-483517
+          project_id: ${{ env.PROJECT_ID }}
 
+      # 4️⃣ Configure Docker to use Artifact Registry
       - name: Configure Docker for Artifact Registry
         run: |
-          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
+      # 5️⃣ Build Docker image
       - name: Build Docker image
         run: |
-          docker build -t us-central1-docker.pkg.dev/devops-k8s-assignment-483517/hello-repo/hello-app:latest -f app/Dockerfile .
+          docker build \
+            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -f app/Dockerfile .
 
+      # 6️⃣ Push Docker image to Artifact Registry
       - name: Push Docker image
         run: |
-          docker push us-central1-docker.pkg.dev/devops-k8s-assignment-483517/hello-repo/hello-app:latest
+          docker push \
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
+      # 7️⃣ Get GKE credentials
       - name: Get GKE credentials
-        run: |
-          gcloud container clusters get-credentials devops-gke \
-            --region us-central1 \
-            --project devops-k8s-assignment-483517
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          location: ${{ env.CLUSTER_LOCATION }}
+          project_id: ${{ env.PROJECT_ID }}
 
+      # 8️⃣ Deploy to Kubernetes
       - name: Deploy to GKE
         run: |
+          sed -i "s|IMAGE_PLACEHOLDER|${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g" k8s/deployment.yaml
           kubectl apply -f k8s/
